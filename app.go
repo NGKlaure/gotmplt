@@ -1,61 +1,98 @@
 package main
 
 import (
-	"html/template"
-	"log"
+	"database/sql"
+	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
+	"text/template"
+
+	_ "github.com/lib/pq"
 )
 
-func main() {
-	fs := http.FileServer(http.Dir("static"))
+const (
+	host     = "localhost"
+	port     = "5432"
+	user     = "postgres"
+	password = "postgres"
+	dbname   = "accounts"
+)
 
-	http.Handle("/static/", http.StripPrefix("/static/", fs)) // you can see each fille in the static
-	//with this localhost:3000/static/stylesheets/main.css.
-
-	//http.Handle("/", fs) // use localhost:3000/example.html in the browser
-	// output helo from a static page
-
-	http.HandleFunc("/", serveTemplate) //all the requests not picked up by the static
-	//file server should be handled with a new serveTemplate function
-
-	log.Println("Listening...")
-	http.ListenAndServe(":3000", nil)
+type Users struct {
+	Username string
+	Password string
 }
 
-func serveTemplate(w http.ResponseWriter, r *http.Request) {
-	lp := filepath.Join("templates", "layout.html")
-	fp := filepath.Join("templates", filepath.Clean(r.URL.Path))
+func index(response http.ResponseWriter, request *http.Request) {
+	temp, _ := template.ParseFiles("templates/index.html")
+	temp.Execute(response, nil)
+}
 
-	// Return a 404 if the template doesn't exist
-	info, err := os.Stat(fp)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.NotFound(w, r)
-			return
+func register(response http.ResponseWriter, request *http.Request) {
+	temp, _ := template.ParseFiles("templates/register.html")
+	temp.Execute(response, nil)
+}
+
+func confirm(response http.ResponseWriter, request *http.Request) {
+	db := connect()
+	temp, _ := template.ParseFiles("templates/confirm.html")
+	var query string
+	user := Users{}
+	user.Username = request.FormValue("name")
+	user.Password = request.FormValue("pw")
+	if uniqueName(db, user.Username) == false || len(user.Username) < 3 {
+		db.Close()
+		if len(user.Username) < 3 {
+			temp, _ := template.ParseFiles("templates/nametooshort.html")
+			temp.Execute(response, nil)
+
+		} else {
+			temp, _ = template.ParseFiles("templates/notunique.html")
+			temp.Execute(response, nil)
+		}
+		return
+	}
+	if len(user.Password) < 3 {
+		db.Close()
+		temp, _ := template.ParseFiles("templates/pwtooshort.html")
+		temp.Execute(response, nil)
+		return
+	}
+	query = "INSERT INTO users (username, password, status)"
+	query += " VALUES ($1, $2, $3)"
+	db.QueryRow(query, user.Username, user.Password, "notapplied")
+	defer db.Close()
+	temp.Execute(response, user)
+}
+
+func uniqueName(db *sql.DB, name string) bool {
+	rows, _ := db.Query("select username from users")
+	for rows.Next() {
+		var username string
+		rows.Scan(&username)
+		if name == username {
+			return false
 		}
 	}
+	return true
+}
 
-	// Return a 404 if the request is for a directory
-	if info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-
-	//tmpl, _ := template.ParseFiles(lp, fp)
-	tmpl, err := template.ParseFiles(lp, fp)
+func connect() *sql.DB {
+	var conn string
+	conn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+	db, err := sql.Open("postgres", conn)
 	if err != nil {
-		// Log the detailed error
-		log.Println(err.Error())
-		// Return a generic "Internal Server Error" message
-		http.Error(w, http.StatusText(500), 500)
-		return
+		panic(err)
 	}
+	fmt.Println("successfully connected to database")
+	return db
+}
 
-	//tmpl.ExecuteTemplate(w, "layout", nil)
-	if err := tmpl.ExecuteTemplate(w, "layout", nil); err != nil {
-		log.Println(err.Error())
-		http.Error(w, http.StatusText(500), 500)
-	}
+func main() {
+	fmt.Println("Hello, go!")
+
+	http.HandleFunc("/", index)
+	http.HandleFunc("/register", register)
+	http.HandleFunc("/confirm", confirm)
+	http.ListenAndServe(":7000", nil)
 }
